@@ -1,0 +1,71 @@
+Simple XMPP client (for chicken).
+Supports SASL login/password authorization. No TLS/SSL yet, no other authentication.
+
+You have to install base64 and md5 extensions to csi with chicken-install.
+The client can be easily ported to other schemes, no any chicken tricks are used.
+
+Inside.
+The client is built on top of "monadic parsers" and is made just for fun. It was used as playground for studying monads, and yes, it's Scheme not Haskell.
+
+The client can be divided in several layers: at bottom is mp (monadic parser). mp is used in xp (xml parser), next layer is dom (despite naming it's just a-la s-exp parser) and finally xmpp layer (among with gm, "general monad"). dom is optional.
+
+1. MP.
+mp is used as general approach for monadic computations^Wparsing. Because of lacking static typing and pattering matching in scheme, there is only one type of monad (read -- "instance") which has constructors (mp:return value rest) and (mp:return* value consumed rest); this gives as triple Value Consumed Rest to represent a result of parsing, further this triple will be reffered as MP or mp;
+
+Parsing is done with functions of type (stream -> MP), where stream is "endless" stream also introduced in mp.scm.
+Endless streams are simply lazy character lists with tails created by need. This allow to lazily read from tcp sockets.
+
+Example: 
+
+((lambda (stream) 
+   (if (eq? (stream:car stream) #\a) 
+     (mp:return* 'OkeyDokey #\a (stream:cdr stream)) 
+     (mp:fail* "A expected!" stream))) 
+ (string->stream "abc"))
+
+So, each parsing function takes stream as argument and produces MP using parsing result as a Value, consumed characters as a Consumed and tail of stream to be parsed further as a Rest. To indicate failed result mp:fail is used. The tail can be used for further parsing.
+
+For convience a few of combinators are provided: mp:any, mp:?, mp:+ and the main combinator >>=. 
+Combinator >>= also introduces a new syntax. All combinator obviously are parsers too.
+Example:
+(mp:any p1 p2) evaluates to a function-parser which tries to use p1 to parse and if it fails, return parsing result of p2. 
+
+A little more about >>=
+The main usage is:
+
+(>>= p1 p2 p3...)
+
+In this usage, >>= simply takes the stream and passes it to first parser p1, then it get Rest from resulted MP and passes to p2 and so on. If one of parser fails, the whole sequence is failed also.
+
+More interesting is a little complicated usage (with new syntax):
+
+(>>= (<- var parser1) 
+     parser2 
+     (<- var2 parser3) 
+     (m:return (create-shiny-result vat var2)))
+
+Here is new syntax for variable binding is used. Generally speaking, this is a sugar for
+(let ((var (parser1)))
+  (>>= parser2 ...))
+
+When need, MP combinators tries to combine itermediate results. Suppose we have 2 results r1 and r2 (both are MP, sure). So, the combined MP is 
+(mp:return 
+	(mp:value r2) ; we take r2 as a parsing value. it very depends on combinator
+	(mp:update-consumed r1 r2) ; we combind Consumed from both parsers
+	(mp:stream r2)) ; and finally use stream from r2
+2. XP, XML parser, DOM
+XML parser is a very simple parser. It doesn't support any validation (except well formerness) and basically acts as a event based parsers.
+A parsing result is constructed with one of functons: xml:start-tag, xml:end-tag, xml:empty-tag, xml:cdata according to parser.
+Mainly used parser is xp:tag/a*, which expects starting or empty tag and evaluates to xml:start-tag or xml:empty. Parser users is responsible to build a parser for given xml file (scheme).
+
+A few functions are provided to parse a whole xml chunk with body. Parsing result is calling "dom" and parser is xp:dom. It recognizes xml processing instuctions <?instruction?>, tag with body <tag>BODY</tag>. BODY may be either CDATA or recursivelly xp:dom.
+
+3. XMPP and GM.
+GM is used to express imperative program flow in functional way. It's very similar to MP except combining arguments. While MP combinators deals with values specific to parsing needs (MP), GM is working over untyped raw "value". GM can hold either Ok value or Fail message value. And GM combinators treats value as simple a-list sonamed "context" or ctx.
+
+Ctx holds important info about current connection: host, port, username, password, input/output ports, intermediate value or processing.
+
+You can start reading from xmpp:clent, this functoin takes Ctx (see ctx.scm for constuctors and getters), wraps it to GM and starts flow xmpp:connect.
+Good luck hacking.
+
+paulaner@gmail.com
